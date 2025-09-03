@@ -1,12 +1,15 @@
 import math
 
-def calculate_plume(yield_mt, wind_speed_kph, wind_direction):
+def calculate_plume(yield_kt, wind_speed_kph, wind_direction):
     """
-    Calculates simplified fallout plume dimensions and orientation.
+    Calculates simplified fallout plume dimensions and orientation based on a WSEG-10-like model.
+    Yield and wind speed are the key factors.
     """
-    # Simplified physics model for plume dimensions
-    plume_length_km = 10 * yield_mt * (wind_speed_kph / 10)
-    plume_width_km = plume_length_km / 3
+    # A simplified empirical model:
+    # Plume length is proportional to yield and wind speed.
+    plume_length_km = 1.5 * (yield_kt ** 0.5) * (wind_speed_kph ** 0.8)
+    # Plume width is a fraction of its length.
+    plume_width_km = plume_length_km / 4
 
     # Convert direction (e.g., 'NE') to an angle in degrees for rotation
     direction_map = {
