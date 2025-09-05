@@ -1,6 +1,7 @@
+# main.py (Fixed Import Error - Complete Version)
+
 import kivy
 import os
-import math
 import matplotlib.pyplot as plt
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -13,11 +14,13 @@ from kivy.uix.popup import Popup
 from kivy.uix.image import Image as KivyImage
 from kivy.uix.widget import Widget
 from kivy.uix.spinner import Spinner
-from kivy.graphics import Color, Ellipse, Rotate, PushMatrix, PopMatrix
+from kivy.graphics import Color, Rotate, PushMatrix, PopMatrix, Rectangle, Ellipse
+# CORRECT IMPORTS: Use Mesh and Line for drawing shapes
+from kivy.graphics.vertex_instructions import Mesh, Line
 from kivy.core.window import Window
 
-# Import your backend logic
-from plume_model import calculate_plume
+# Import the correct function from your backend
+from plume_model import calculate_full_plume
 from dose_decay import generate_dose_data
 from fallout_calculator import calculate_initial_dose_rate
 
@@ -25,39 +28,88 @@ from fallout_calculator import calculate_initial_dose_rate
 Window.size = (1000, 700)
 
 class PlumeDrawingWidget(Widget):
-    """A custom widget for drawing the fallout plume."""
-    def __init__(self, plume_length, plume_width, plume_angle, **kwargs):
+    """A custom widget for drawing the fallout plume polygons."""
+    def __init__(self, contours, angle, **kwargs):
         super().__init__(**kwargs)
-        self.plume_length = plume_length
-        self.plume_width = plume_width
-        self.plume_angle = plume_angle
-        # Bind the draw_plume method to the widget's size and position
-        self.bind(pos=self.draw_plume, size=self.draw_plume)
-        self.draw_plume()
+        self.contours = contours
+        self.angle = angle
+        # This dictionary maps dose levels to colors (R, G, B, Alpha)
+        self.dose_colors = {
+            '1000_rad_hr': (1, 0, 0, 0.8),    # Red
+            '300_rad_hr':  (1, 0.5, 0, 0.7),  # Orange
+            '100_rad_hr':  (1, 1, 0, 0.6),    # Yellow
+            '30_rad_hr':   (0.5, 1, 0, 0.5),  # Lime Green
+            '10_rad_hr':   (0, 1, 0, 0.4),    # Green
+        }
+        # Call the drawing function when the widget size is known
+        self.bind(size=self.draw_plume)
+
+    def triangulate_polygon(self, points):
+        """
+        Simple triangulation for convex polygons (fan triangulation from first vertex)
+        Returns vertices and indices for Mesh rendering
+        """
+        if len(points) < 3:
+            return [], []
+        
+        # Convert to vertices format [x, y, u, v, x2, y2, u2, v2, ...]
+        vertices = []
+        for i, (x, y) in enumerate(points):
+            # u, v are texture coordinates (we'll use 0,0 for solid colors)
+            vertices.extend([x, y, 0, 0])
+        
+        # Create triangle indices (fan triangulation)
+        indices = []
+        for i in range(1, len(points) - 1):
+            indices.extend([0, i, i + 1])  # Triangle from vertex 0 to consecutive vertices
+        
+        return vertices, indices
 
     def draw_plume(self, *args):
         self.canvas.clear()
         
-        # Center the plume in the widget
+        # Scaling factor to make the plume visible (miles -> pixels)
+        SCALE_FACTOR = 2.0 
+        
         center_x = self.width / 2
         center_y = self.height / 2
         
         with self.canvas:
             PushMatrix()
-            # Rotate the canvas based on the plume's angle
-            rotate = Rotate(angle=self.plume_angle, origin=(center_x, center_y))
+            # Rotate the entire canvas around the center point
+            Rotate(angle=self.angle, origin=(center_x, center_y))
             
-            # Draw a semi-transparent yellow outer zone
-            Color(1, 1, 0, 0.5)
-            Ellipse(pos=(center_x - self.plume_length / 2, center_y - self.plume_width / 2),
-                      size=(self.plume_length, self.plume_width))
+            # Draw the contours from highest dose to lowest
+            sorted_dose_keys = sorted(self.contours.keys(), key=lambda x: int(x.split('_')[0]), reverse=True)
+            
+            for dose_key in sorted_dose_keys:
+                points = self.contours[dose_key]
+                if len(points) < 3:  # Need at least 3 points for a polygon
+                    continue
+                    
+                color = self.dose_colors.get(dose_key, (1, 1, 1, 0.3))
+                Color(*color)
+                
+                # Scale and translate points
+                scaled_points = []
+                for x, y in points:
+                    scaled_x = x * SCALE_FACTOR + center_x
+                    scaled_y = y * SCALE_FACTOR + center_y
+                    scaled_points.append((scaled_x, scaled_y))
 
-            # Draw a more opaque inner red zone
-            Color(1, 0, 0, 0.8)
-            inner_length = self.plume_length * 0.4
-            inner_width = self.plume_width * 0.4
-            Ellipse(pos=(center_x - inner_length / 2, center_y - inner_width / 2),
-                      size=(inner_length, inner_width))
+                # Create filled polygon using Mesh
+                vertices, indices = self.triangulate_polygon(scaled_points)
+                if vertices and indices:
+                    Mesh(vertices=vertices, indices=indices, mode='triangles')
+                
+                # Draw outline for better visibility
+                outline_points = []
+                for x, y in scaled_points:
+                    outline_points.extend([x, y])
+                
+                # Draw a darker outline
+                Color(color[0] * 0.7, color[1] * 0.7, color[2] * 0.7, color[3])
+                Line(points=outline_points, width=1, close=True)
             
             PopMatrix()
 
@@ -69,9 +121,16 @@ class NuclearApp(App):
         # Left-side layout for map and plume
         self.map_area = RelativeLayout(size_hint_x=0.7)
         
-        # Static map image
-        self.map_image = KivyImage(source='assets/delhi_map.webp', allow_stretch=True, keep_ratio=False)
-        self.map_area.add_widget(self.map_image)
+        # Static map image (fallback to colored background if image not available)
+        try:
+            self.map_image = KivyImage(source='assets/delhi_map.webp', allow_stretch=True, keep_ratio=False)
+            self.map_area.add_widget(self.map_image)
+        except:
+            # Fallback background if map image is not available
+            with self.map_area.canvas.before:
+                Color(0.2, 0.2, 0.2)
+                self.map_rect = Rectangle(size=self.map_area.size, pos=self.map_area.pos)
+            self.map_area.bind(size=self._update_rect, pos=self._update_rect)
         
         # Transparent layer for drawing the plume on top
         self.plume_drawing_layer = Widget()
@@ -79,8 +138,9 @@ class NuclearApp(App):
 
         # Controls panel on the right
         self.controls = GridLayout(cols=1, spacing=10, padding=10, size_hint_x=0.3)
-        self.controls.add_widget(Label(text='Nuclear Fallout Simulator', size_hint_y=None, height=40))
+        self.controls.add_widget(Label(text='Nuclear Fallout Simulator', size_hint_y=None, height=40, font_size='20sp'))
 
+        # Input fields
         self.controls.add_widget(Label(text='Location:', size_hint_y=None, height=30))
         self.location_input_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=30)
         self.lat_input = TextInput(text='28.6', hint_text='Lat', multiline=False)
@@ -90,17 +150,17 @@ class NuclearApp(App):
         self.controls.add_widget(self.location_input_layout)
         
         self.controls.add_widget(Label(text='Yield (kilotons):', size_hint_y=None, height=30))
-        self.yield_input = TextInput(text='15', multiline=False, size_hint_y=None, height=30)
+        self.yield_input = TextInput(text='150', multiline=False, size_hint_y=None, height=30)
         self.controls.add_widget(self.yield_input)
         
         self.controls.add_widget(Label(text='Wind Speed (km/h):', size_hint_y=None, height=30))
-        self.wind_speed_input = TextInput(text='20', multiline=False, size_hint_y=None, height=30)
+        self.wind_speed_input = TextInput(text='24', multiline=False, size_hint_y=None, height=30)
         self.controls.add_widget(self.wind_speed_input)
         
         self.controls.add_widget(Label(text='Wind Direction:', size_hint_y=None, height=30))
         self.wind_direction_spinner = Spinner(
-            text='NE', values=['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
-            size_hint=(None, None), size=(100, 40)
+            text='E', values=['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
+            size_hint_y=None, height=40
         )
         self.controls.add_widget(self.wind_direction_spinner)
         
@@ -117,31 +177,43 @@ class NuclearApp(App):
         
         return self.main_layout
 
+    def _update_rect(self, instance, value):
+        """Update background rectangle when map area changes (fallback method)"""
+        if hasattr(self, 'map_rect'):
+            self.map_rect.pos = instance.pos
+            self.map_rect.size = instance.size
+
     def run_simulation(self, instance):
         try:
             yield_kt = float(self.yield_input.text)
             wind_speed = float(self.wind_speed_input.text)
             wind_direction = self.wind_direction_spinner.text
 
-            plume_dimensions = calculate_plume(yield_kt, wind_speed, wind_direction)
+            # Call the backend function
+            plume_data = calculate_full_plume(yield_kt, wind_speed, wind_direction)
             
             # Clear any previous plume drawing
             self.plume_drawing_layer.clear_widgets()
             
-            # Pass the calculated dimensions to your drawing widget
-            # Scaling factor to make the plume visible on the map
-            scaling_factor = 200 / (plume_dimensions['length'] + plume_dimensions['width'])
+            # Remove the old plume widget if it exists
+            if hasattr(self, 'plume_widget'):
+                self.plume_drawing_layer.remove_widget(self.plume_widget)
             
-            plume_length_scaled = plume_dimensions['length'] * scaling_factor
-            plume_width_scaled = plume_dimensions['width'] * scaling_factor
-            plume_angle = plume_dimensions['angle']
-            
-            plume_widget = PlumeDrawingWidget(plume_length_scaled, plume_width_scaled, plume_angle)
-            self.plume_drawing_layer.add_widget(plume_widget)
+            # Create an instance of our new drawing widget
+            # Pass the contours and angle from the plume_data dictionary
+            self.plume_widget = PlumeDrawingWidget(
+                contours=plume_data['contours'], 
+                angle=plume_data['angle']
+            )
+            self.plume_drawing_layer.add_widget(self.plume_widget)
 
         except ValueError:
-            # Handle invalid input gracefully
-            pass
+            popup = Popup(title='Input Error',
+                          content=Label(text='Please enter valid numbers for yield and wind speed.'),
+                          size_hint=(None, None), size=(400, 200))
+            popup.open()
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
     def show_dose_graph(self, instance):
         try:
@@ -169,7 +241,7 @@ class NuclearApp(App):
             
             # 4. Display the image in a Popup
             content = BoxLayout(orientation='vertical')
-            graph_image = KivyImage(source=plot_path, allow_stretch=True, keep_ratio=True)
+            graph_image = KivyImage(source=plot_path, reload=True, nocache=True, allow_stretch=True, keep_ratio=True)
             close_button = Button(text='Close', size_hint_y=None, height=50)
             
             content.add_widget(graph_image)
@@ -178,9 +250,14 @@ class NuclearApp(App):
             popup = Popup(title='Dose Rate Graph', content=content, size_hint=(0.8, 0.8), auto_dismiss=False)
             close_button.bind(on_press=popup.dismiss)
             popup.open()
-        
+            
         except ValueError:
-            pass
+            popup = Popup(title='Input Error',
+                          content=Label(text='Please enter a valid number for yield.'),
+                          size_hint=(None, None), size=(400, 200))
+            popup.open()
+        except Exception as e:
+            print(f"Could not generate graph: {e}")
 
 if __name__ == '__main__':
     NuclearApp().run()
