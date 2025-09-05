@@ -1,8 +1,7 @@
 # dose_decay.py
-
 import math
 
-def generate_dose_data(initial_dose_rate=1000):
+def generate_dose_data(initial_dose_rate):
     """
     Generates dose data points for a graph showing radioactive decay over time.
     
@@ -15,11 +14,11 @@ def generate_dose_data(initial_dose_rate=1000):
     Returns:
         tuple: (time_points, dose_data) where both are lists of equal length
     """
+    # Using the t^-1.2 rule, a standard model for fallout decay
     time_points = [x for x in range(1, 101)]  # 1 to 100 hours
     dose_data = [initial_dose_rate * (time ** -1.2) for time in time_points]
     
     return time_points, dose_data
-
 
 def calculate_integrated_dose(initial_dose_rate, start_time, end_time):
     """
@@ -40,7 +39,6 @@ def calculate_integrated_dose(initial_dose_rate, start_time, end_time):
         return -5 * initial_dose_rate * (t ** -0.2)
     
     return antiderivative(end_time) - antiderivative(start_time)
-
 
 # Test function - run this file directly to see sample output
 if __name__ == '__main__':

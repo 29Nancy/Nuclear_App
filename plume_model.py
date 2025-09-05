@@ -101,6 +101,26 @@ def calculate_full_plume(yield_kt, wind_speed_kph, wind_direction, fission_fract
     
     return output
 
+def calculate_plume(yield_kt, wind_speed_kph, wind_direction):
+    """
+    Legacy function for backward compatibility with simplified plume calculations.
+    This provides a simplified empirical model as a fallback.
+    """
+    # A simplified empirical model:
+    # Plume length is proportional to yield and wind speed.
+    plume_length_km = 1.5 * (yield_kt ** 0.5) * (wind_speed_kph ** 0.8)
+    # Plume width is a fraction of its length.
+    plume_width_km = plume_length_km / 4
+
+    # Convert direction to angle
+    angle = DIRECTION_MAP.get(wind_direction.upper(), 0)
+    
+    return {
+        'length': plume_length_km,
+        'width': plume_width_km,
+        'angle': angle
+    }
+
 # This block allows you to test the model independently by running "python plume_model.py"
 if __name__ == '__main__':
     # --- Test Inputs ---

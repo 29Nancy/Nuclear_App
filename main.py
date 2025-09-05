@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.relativelayout import RelativeLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
@@ -13,7 +14,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.image import Image as KivyImage
 from kivy.uix.widget import Widget
 from kivy.uix.spinner import Spinner
-from kivy.graphics import Color, Rotate, PushMatrix, PopMatrix, Rectangle
+from kivy.graphics import Color, Rotate, PushMatrix, PopMatrix, Rectangle, Ellipse
 # CORRECT IMPORTS: Use Mesh and Line for drawing shapes
 from kivy.graphics.vertex_instructions import Mesh, Line
 from kivy.core.window import Window
@@ -21,7 +22,9 @@ from kivy.core.window import Window
 # Import the correct function from your backend
 from plume_model import calculate_full_plume
 from dose_decay import generate_dose_data
+from fallout_calculator import calculate_initial_dose_rate
 
+# Ensure the window size is set
 Window.size = (1000, 700)
 
 class PlumeDrawingWidget(Widget):
@@ -115,12 +118,25 @@ class NuclearApp(App):
     def build(self):
         self.main_layout = BoxLayout(orientation='horizontal')
         
-        self.map_area = Widget(size_hint_x=0.7)
-        with self.map_area.canvas.before:
-            Color(0.2, 0.2, 0.2)
-            self.map_rect = Rectangle(size=self.map_area.size, pos=self.map_area.pos)
-        self.map_area.bind(size=self._update_rect, pos=self._update_rect)
+        # Left-side layout for map and plume
+        self.map_area = RelativeLayout(size_hint_x=0.7)
         
+        # Static map image (fallback to colored background if image not available)
+        try:
+            self.map_image = KivyImage(source='assets/delhi_map.webp', allow_stretch=True, keep_ratio=False)
+            self.map_area.add_widget(self.map_image)
+        except:
+            # Fallback background if map image is not available
+            with self.map_area.canvas.before:
+                Color(0.2, 0.2, 0.2)
+                self.map_rect = Rectangle(size=self.map_area.size, pos=self.map_area.pos)
+            self.map_area.bind(size=self._update_rect, pos=self._update_rect)
+        
+        # Transparent layer for drawing the plume on top
+        self.plume_drawing_layer = Widget()
+        self.map_area.add_widget(self.plume_drawing_layer)
+
+        # Controls panel on the right
         self.controls = GridLayout(cols=1, spacing=10, padding=10, size_hint_x=0.3)
         self.controls.add_widget(Label(text='Nuclear Fallout Simulator', size_hint_y=None, height=40, font_size='20sp'))
 
@@ -162,8 +178,10 @@ class NuclearApp(App):
         return self.main_layout
 
     def _update_rect(self, instance, value):
-        self.map_rect.pos = instance.pos
-        self.map_rect.size = instance.size
+        """Update background rectangle when map area changes (fallback method)"""
+        if hasattr(self, 'map_rect'):
+            self.map_rect.pos = instance.pos
+            self.map_rect.size = instance.size
 
     def run_simulation(self, instance):
         try:
@@ -174,9 +192,12 @@ class NuclearApp(App):
             # Call the backend function
             plume_data = calculate_full_plume(yield_kt, wind_speed, wind_direction)
             
+            # Clear any previous plume drawing
+            self.plume_drawing_layer.clear_widgets()
+            
             # Remove the old plume widget if it exists
             if hasattr(self, 'plume_widget'):
-                self.map_area.remove_widget(self.plume_widget)
+                self.plume_drawing_layer.remove_widget(self.plume_widget)
             
             # Create an instance of our new drawing widget
             # Pass the contours and angle from the plume_data dictionary
@@ -184,7 +205,7 @@ class NuclearApp(App):
                 contours=plume_data['contours'], 
                 angle=plume_data['angle']
             )
-            self.map_area.add_widget(self.plume_widget)
+            self.plume_drawing_layer.add_widget(self.plume_widget)
 
         except ValueError:
             popup = Popup(title='Input Error',
@@ -196,8 +217,15 @@ class NuclearApp(App):
 
     def show_dose_graph(self, instance):
         try:
-            time_points, dose_data = generate_dose_data(1000)
+            yield_kt = float(self.yield_input.text)
             
+            # Calculate a location-specific initial dose rate
+            initial_dose_rate = calculate_initial_dose_rate(yield_kt)
+
+            # 1. Generate the data points
+            time_points, dose_data = generate_dose_data(initial_dose_rate)
+            
+            # 2. Create the Matplotlib plot
             plt.style.use('dark_background')
             plt.figure(figsize=(6, 4))
             plt.plot(time_points, dose_data, color='cyan')
@@ -206,12 +234,14 @@ class NuclearApp(App):
             plt.ylabel('Dose Rate (rad/hr)', color='white')
             plt.grid(True, linestyle='--', alpha=0.6)
             
+            # 3. Save the plot to a temporary file
             plot_path = os.path.join(os.getcwd(), 'dose_graph.png')
             plt.savefig(plot_path, transparent=True)
             plt.close()
             
+            # 4. Display the image in a Popup
             content = BoxLayout(orientation='vertical')
-            graph_image = KivyImage(source=plot_path, reload=True, nocache=True)
+            graph_image = KivyImage(source=plot_path, reload=True, nocache=True, allow_stretch=True, keep_ratio=True)
             close_button = Button(text='Close', size_hint_y=None, height=50)
             
             content.add_widget(graph_image)
@@ -219,6 +249,12 @@ class NuclearApp(App):
             
             popup = Popup(title='Dose Rate Graph', content=content, size_hint=(0.8, 0.8), auto_dismiss=False)
             close_button.bind(on_press=popup.dismiss)
+            popup.open()
+            
+        except ValueError:
+            popup = Popup(title='Input Error',
+                          content=Label(text='Please enter a valid number for yield.'),
+                          size_hint=(None, None), size=(400, 200))
             popup.open()
         except Exception as e:
             print(f"Could not generate graph: {e}")
